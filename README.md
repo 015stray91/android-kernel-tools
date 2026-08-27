@@ -1,6 +1,22 @@
 # Kernel Toolchains 
 # AOSP (GCC & Clang ) and Qualcomm Snapdragon Clang
 --------
+## Ubuntu 22 compiler node
+
+The repository now includes a repeatable Ubuntu 22.04 setup:
+
+```bash
+scripts/bootstrap-ubuntu22.sh
+scripts/doctor.sh
+source scripts/toolchain-env.sh aosp12
+```
+
+Use `scripts/build-kernel.sh --help` for a parameterized make-based kernel
+build. See [the compiler-node guide](docs/UBUNTU22_COMPILER_NODE.md) for the
+Moto G Stylus 5G (2023), storage layout, toolchain profiles, and headless Devin
+Outposts setup.
+
+--------
 How to compile android kernel? Detailed Instructions [**Here**](https://forum.xda-developers.com/t/reference-how-to-compile-an-android-kernel.3627297/).  
 Install latest version of Make from [**Here**](https://ftp.gnu.org/gnu/make).  
 Instructions here are only for Linux OS machines, don't get messed in Windows unless you know how to use properly.
