@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034
 
 toolchain_env_usage() {
   cat <<'EOF'
