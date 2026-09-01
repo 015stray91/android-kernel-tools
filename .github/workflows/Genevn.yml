@@ -5,10 +5,13 @@ on:
     branches: [ "android-14-release-u1tgns34.42-86-2-32" ]
   workflow_dispatch:
 
+# Add this global env block right here
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+
 jobs:
   compile-kernel:
     runs-on: ubuntu-22.04
-
     steps:
       - name: Maximize Workspace Disk Space
         uses: easimon/maximize-build-space@master
