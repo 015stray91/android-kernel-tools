@@ -1,17 +1,17 @@
-name: AnyRealm Genevn Kernel Build
+name: AnyRealm Genevn Kernel Build (Toolchain Host)
 
 on:
   push:
-    branches: [ "android-14-release-u1tgns34.42-86-2-32" ]
+    branches: [ "main" ] # Replace with your active toolchain branch if different
   workflow_dispatch:
 
-# Add this global env block right here
 env:
   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
 
 jobs:
   compile-kernel:
     runs-on: ubuntu-22.04
+
     steps:
       - name: Maximize Workspace Disk Space
         uses: easimon/maximize-build-space@master
@@ -22,7 +22,14 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
 
-      - name: Checkout Core Kernel Tree
+      - name: Checkout Local Snapdragon Toolchain
+        uses: actions/checkout@v4
+        with:
+          # Automatically pulls down android-kernel-tools into the root folder named 'tools'
+          path: 'tools'
+          fetch-depth: 1
+
+      - name: Checkout External Core Kernel Tree
         uses: actions/checkout@v4
         with:
           repository: '015stray91/kernel-msm-1'
@@ -30,74 +37,55 @@ jobs:
           ref: 'android-14-release-u1tgns34.42-86-2-32'
           fetch-depth: 1
 
-      - name: Checkout Snapdragon Static Toolchain
-        uses: actions/checkout@v4
-        with:
-          repository: '015stray91/android-kernel-tools'
-          path: 'tools'
-          fetch-depth: 1
-
       - name: Provision Legacy Build Environment
         run: |
           sudo apt-get update
           sudo apt-get install -y bc build-essential libncurses5 libtinfo5 libssl-dev xz-utils flex bison python3-distutils jq curl unzip
 
-            - name: Inject Decoupled OpenCode Forks Dynamically
+      - name: Inject Decoupled OpenCode Forks Dynamically
         env:
-          # Authenticates your API call to bypass rate limits entirely
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      -  run: |
+          # Pulls the secret directly from your android-kernel-tools repository settings
+          GITHUB_TOKEN: ${{ secrets.OPENCODE_TOKEN }}
+        run: |
           cd kernel-source
           TARGET_TAG="MMI-U1TGNS34.42-86-2-32"
           
-          echo "Querying authenticated GitHub API across multiple pages..."
-          
-          # Loop through pages 1 and 2 to ensure all 60+ forks are fully captured
+          echo "Scanning OpenCode forks across profile pages..."
           USER_REPOS=""
           for PAGE in 1 2; do
-            PAGE_REPOS=$(curl -s -H "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" \
+            PAGE_REPOS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
               "https://github.com{PAGE}&per_page=100" | jq -r '.[].name 2>/dev/null' || true)
             USER_REPOS="$USER_REPOS $PAGE_REPOS"
           done
           
-          # Clean up whitespace and process the full array
           for REPO in $USER_REPOS; do
             if [[ "$REPO" == *"techpack"* || "$REPO" == *"drivers-external"* || "$REPO" == *"motorola-"* ]]; then
               
-              # Translate repository naming logic directly into the GKI 1.0 layout paths
               TARGET_DIR=$(echo "$REPO" | sed 's/-/ \+/g' | sed 's/techpack /techpack\//g' | sed 's/drivers external /drivers\/external\//g' | sed 's/motorola hardware /drivers\/hardware\//g' | tr -d ' ')
               
-              echo "--------------------------------------------------------"
-              echo "Injecting Decoupled Component: $REPO @ Tag: $TARGET_TAG"
-              echo "Destination Path: $TARGET_DIR"
-              echo "--------------------------------------------------------"
-              
+              echo "Extracting: $REPO @ Tag: $TARGET_TAG -> $TARGET_DIR"
               rm -rf "$TARGET_DIR"
               
-              # Clone the specific release tag provided by your instructions
               git clone --depth=1 --branch "$TARGET_TAG" "https://github.com{REPO}.git" "$TARGET_DIR" || {
-                echo "Warning: Tag match failed for $REPO, utilizing fallback default branch."
+                echo "Fallback to default branch for: $REPO"
                 git clone --depth=1 "https://github.com{REPO}.git" "$TARGET_DIR"
               }
             fi
           done
-          
 
-      - name: Execute Parallel Kernel Compilation
+      - name: Execute Custom Toolchain Kernel Compilation
         run: |
           cd kernel-source
           
-          # 1. Establish path routing to your static compiler tools
+          # Path matching now securely aligns to your runner's root tools workspace
           export PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/bin:${{ github.workspace }}/tools/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH"
           export LD_LIBRARY_PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/lib64:$LD_LIBRARY_PATH"
           
-          # 2. Hard-force compilation architecture parameters
           export ARCH=arm64
           export SUBARCH=ARM64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
           
-          # 3. Handle structure cleaning and explicit config stacking
           make O=out clean mrproper
           make O=out gki_defconfig
           
@@ -107,7 +95,6 @@ jobs:
             
           make O=out olddefconfig
           
-          # 4. Fire compilation loop completely locked to static Clang 12
           make O=out \
             CC=clang \
             AR=llvm-ar \
@@ -124,3 +111,4 @@ jobs:
           path: |
             kernel-source/out/arch/arm64/boot/Image.gz
             kernel-source/out/drivers/**/*.ko
+            
