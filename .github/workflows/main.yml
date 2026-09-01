@@ -1,0 +1,66 @@
+name: AnyRealm Genevn Kernel Build
+
+on:
+  push:
+    branches: [ "android-14-release-u1tgns34.42-86-2-32" ]
+  workflow_dispatch:
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 4096
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: '015stray91/kernel-msm-1'
+          ref: 'android-14-release-u1tgns34.42-86-2-32'
+          path: 'kernel-source'
+
+      - name: Checkout Android Kernel Tools
+        uses: actions/checkout@v5
+        with:
+          repository: '015stray91/android-kernel-tools'
+          path: 'tools'
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc build-essential libncurses5-dev libssl-dev xz-utils flex bison python3-distutils libelf-dev
+
+      - name: Compile Kernel via Snapdragon Clang
+        run: |
+          cd kernel-source
+          
+          # Setup paths to your checked out tools repo
+          export TOP="${{ github.workspace }}"
+          export PATH="$TOP/tools/sdclang/linux-x86_64/bin:$PATH"
+          export PATH="$TOP/tools/gcc/linux-x86_64/aarch64/aarch64-linux-android-4.9/bin:$PATH"
+          export PATH="$TOP/tools/gcc/linux-x86_64/arm/arm-linux-androideabi-4.9/bin:$PATH"
+          
+          # Setup environment flags for target device family
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          
+          # Print compiler details to verify
+          clang --version
+          
+          # Clean build output paths
+          make O=out clean mrproper
+          
+          # Apply the target configuration file
+          make O=out CC=clang genevn_config
+          
+          # Run compilation loop using maximum parallel runners
+          make O=out CC=clang -j$(nproc --all)
