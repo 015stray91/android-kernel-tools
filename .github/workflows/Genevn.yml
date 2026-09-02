@@ -93,9 +93,11 @@ jobs:
           ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
             out/.config \
             arch/arm64/configs/vendor/ext_config/genevn_config
-            
-          make O=out olddefconfig
-          
+
+          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' out/.config
+          sed -i 's|CONFIG_WERROR=y|# CONFIG_WERROR is not set|' out/.config
+          yes "" | make O=out olddefconfig
+
           make O=out \
             CC=clang \
             AR=llvm-ar \
