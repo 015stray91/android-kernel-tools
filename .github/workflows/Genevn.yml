@@ -51,7 +51,7 @@ jobs:
         run: |
           cd kernel-source
           TARGET_TAG="MMI-U1TGNS34.42-86-2-32"
-          
+
           echo "Scanning OpenCode forks across profile pages..."
           USER_REPOS=""
           for PAGE in 1 2; do
@@ -59,15 +59,14 @@ jobs:
               "https://api.github.com/user/repos?page=${PAGE}&per_page=100" | jq -r '.[].name' 2>/dev/null || true)
             USER_REPOS="$USER_REPOS $PAGE_REPOS"
           done
-          
+
           for REPO in $USER_REPOS; do
             if [[ "$REPO" == *"techpack"* || "$REPO" == *"drivers-external"* || "$REPO" == *"motorola-"* ]]; then
-              
               TARGET_DIR=$(echo "$REPO" | sed 's/-/ \+/g' | sed 's/techpack /techpack\//g' | sed 's/drivers external /drivers\/external\//g' | sed 's/motorola hardware /drivers\/hardware\//g' | tr -d ' ')
-              
+
               echo "Extracting: $REPO @ Tag: $TARGET_TAG -> $TARGET_DIR"
               rm -rf "$TARGET_DIR"
-              
+
               git clone --depth=1 --branch "$TARGET_TAG" "https://github.com/${REPO}.git" "$TARGET_DIR" || {
                 echo "Fallback to default branch for: $REPO"
                 git clone --depth=1 "https://github.com/${REPO}.git" "$TARGET_DIR"
@@ -75,16 +74,28 @@ jobs:
             fi
           done
 
-      - name: Patch Kernel Source (LZ4 + namespace fixes)
+      - name: Patch Kernel Source (LZ4 arm64 + namespace fixes)
         run: |
           cd kernel-source
 
-          # Fix: add lib/lz4/lz4.h include to all .c files that use LZ4_arm64_decompress_safe
-          # The kernel's include/linux/lz4.h lacks the arm64 variant; lib/lz4/lz4.h has it
+          # Create a forward-declaration header for LZ4_arm64_decompress_safe.
+          # lib/lz4/lz4.h cannot be included alongside <linux/lz4.h>
+          # (typedef redefinition), so we declare just the arm64 entry point.
+          printf '%s\n' \
+            "#ifndef _KOTO_LZ4_ARM64_DECOMPRESS_H" \
+            "#define _KOTO_LZ4_ARM64_DECOMPRESS_H" \
+            "#include <linux/types.h>" \
+            "ssize_t LZ4_arm64_decompress_safe(const void *source, void *dest," \
+            "                                      size_t inputSize, size_t outputSize," \
+            "                                      bool dip);" \
+            "#endif" \
+            > include/linux/lz4_arm64_decompress.h
+
+          # Add include to all .c files that use LZ4_arm64_decompress_safe
           for f in $(grep -rl "LZ4_arm64_decompress_safe" --include="*.c" . 2>/dev/null); do
-            if ! grep -q 'lib/lz4/lz4.h' "$f"; then
+            if ! grep -q 'lz4_arm64_decompress.h' "$f"; then
               echo "Patching: $f"
-              sed -i '/^#include/i #include "../lib/lz4/lz4.h"' "$f"
+              sed -i '/^#include <linux\/lz4.h>/a #include <linux/lz4_arm64_decompress.h>' "$f"
             fi
           done
 
@@ -96,20 +107,20 @@ jobs:
       - name: Execute Custom Toolchain Kernel Compilation
         run: |
           cd kernel-source
-          
+
           # Path matching now securely aligns to your runner's root tools workspace
           export PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/bin:${{ github.workspace }}/tools/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH"
           export LD_LIBRARY_PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/lib64:$LD_LIBRARY_PATH"
-          
+
           export ARCH=arm64
           export SUBARCH=ARM64
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
-          
+
           rm -rf out/
           mkdir -p out
           make O=out gki_defconfig
-          
+
           ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
             out/.config \
             arch/arm64/configs/vendor/ext_config/genevn_config
@@ -134,4 +145,3 @@ jobs:
           path: |
             kernel-source/out/arch/arm64/boot/Image.gz
             kernel-source/out/drivers/**/*.ko
-            
