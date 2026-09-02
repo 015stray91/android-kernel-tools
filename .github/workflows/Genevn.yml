@@ -1,4 +1,6 @@
 name: AnyRealm Genevn Kernel Build (Toolchain Host)
+# Source repo: https://github.com/015stray91/kernel-msm-1.git
+# Toolchain: https://github.com/015stray91/android-kernel-tools.git
 
 on:
   push:
@@ -72,6 +74,16 @@ jobs:
               }
             fi
           done
+
+      - name: Patch Kernel Source (LZ4 + namespace fixes)
+        run: |
+          cd kernel-source
+
+          # Fix 1: crypto/lz4.c - include lib/lz4 arm64 header for LZ4_arm64_decompress_safe
+          sed -i '/#include <crypto\/internal\/scompress.h>/a #include "../lib/lz4/lz4.h"' crypto/lz4.c
+
+          # Fix 2: fs/namespace.c - define DEFAULT_UNSHARE_KSU_MNT_ID if missing
+          sed -i 's|#include <uapi/linux/mount.h>|#include <uapi/linux/mount.h>\n#ifndef DEFAULT_UNSHARE_KSU_MNT_ID\n#define DEFAULT_UNSHARE_KSU_MNT_ID 100000\n#endif|' fs/namespace.c
 
       - name: Execute Custom Toolchain Kernel Compilation
         run: |
