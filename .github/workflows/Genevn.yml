@@ -1,147 +1,46 @@
-name: AnyRealm Genevn Kernel Build (Toolchain Host)
+name: AnyRealm Genevn Kernel Build
 # Source repo: https://github.com/015stray91/kernel-msm-1.git
 # Toolchain: https://github.com/015stray91/android-kernel-tools.git
 
 on:
-  push:
-    branches: [ "main" ] # Replace with your active toolchain branch if different
   workflow_dispatch:
-
-env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+    inputs:
+      device_codename:
+        description: "Device codename"
+        type: choice
+        options:
+          - parrot
+          - genevn
+        default: "genevn"
+      add_susfs:
+        description: "Add SUSFS"
+        type: boolean
+        default: true
+      add_zeromount:
+        description: "Add ZeroMount"
+        type: boolean
+        default: true
+      add_overlayfs:
+        description: "Add OverlayFS"
+        type: boolean
+        default: true
+      add_zram:
+        description: "Add ZRAM"
+        type: boolean
+        default: true
+      add_kpm:
+        description: "Add KPM"
+        type: boolean
+        default: true
 
 jobs:
-  compile-kernel:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Maximize Workspace Disk Space
-        uses: easimon/maximize-build-space@master
-        with:
-          root-reserve-mb: 2048
-          swap-size-mb: 8192
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-
-      - name: Checkout Local Snapdragon Toolchain
-        uses: actions/checkout@v4
-        with:
-          # Automatically pulls down android-kernel-tools into the root folder named 'tools'
-          path: 'tools'
-          fetch-depth: 1
-
-      - name: Checkout External Core Kernel Tree
-        uses: actions/checkout@v4
-        with:
-          repository: '015stray91/kernel-msm-1'
-          path: 'kernel-source'
-          ref: 'android-14-release-u1tgns34.42-86-2-32'
-          fetch-depth: 1
-
-      - name: Provision Legacy Build Environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc build-essential libncurses5 libtinfo5 libssl-dev xz-utils flex bison python3-distutils jq curl unzip
-
-      - name: Inject Decoupled OpenCode Forks Dynamically
-        env:
-          # Pulls the secret directly from your android-kernel-tools repository settings
-          GITHUB_TOKEN: ${{ secrets.OPENCODE_TOKEN }}
-        run: |
-          cd kernel-source
-          TARGET_TAG="MMI-U1TGNS34.42-86-2-32"
-
-          echo "Scanning OpenCode forks across profile pages..."
-          USER_REPOS=""
-          for PAGE in 1 2; do
-            PAGE_REPOS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              "https://api.github.com/user/repos?page=${PAGE}&per_page=100" | jq -r '.[].name' 2>/dev/null || true)
-            USER_REPOS="$USER_REPOS $PAGE_REPOS"
-          done
-
-          for REPO in $USER_REPOS; do
-            if [[ "$REPO" == *"techpack"* || "$REPO" == *"drivers-external"* || "$REPO" == *"motorola-"* ]]; then
-              TARGET_DIR=$(echo "$REPO" | sed 's/-/ \+/g' | sed 's/techpack /techpack\//g' | sed 's/drivers external /drivers\/external\//g' | sed 's/motorola hardware /drivers\/hardware\//g' | tr -d ' ')
-
-              echo "Extracting: $REPO @ Tag: $TARGET_TAG -> $TARGET_DIR"
-              rm -rf "$TARGET_DIR"
-
-              git clone --depth=1 --branch "$TARGET_TAG" "https://github.com/${REPO}.git" "$TARGET_DIR" || {
-                echo "Fallback to default branch for: $REPO"
-                git clone --depth=1 "https://github.com/${REPO}.git" "$TARGET_DIR"
-              }
-            fi
-          done
-
-      - name: Patch Kernel Source (LZ4 arm64 + namespace fixes)
-        run: |
-          cd kernel-source
-
-          # Create a forward-declaration header for LZ4_arm64_decompress_safe.
-          # lib/lz4/lz4.h cannot be included alongside <linux/lz4.h>
-          # (typedef redefinition), so we declare just the arm64 entry point.
-          printf '%s\n' \
-            "#ifndef _KOTO_LZ4_ARM64_DECOMPRESS_H" \
-            "#define _KOTO_LZ4_ARM64_DECOMPRESS_H" \
-            "#include <linux/types.h>" \
-            "ssize_t LZ4_arm64_decompress_safe(const void *source, void *dest," \
-            "                                      size_t inputSize, size_t outputSize," \
-            "                                      bool dip);" \
-            "#endif" \
-            > include/linux/lz4_arm64_decompress.h
-
-          # Add include to all .c files that use LZ4_arm64_decompress_safe
-          for f in $(grep -rl "LZ4_arm64_decompress_safe" --include="*.c" . 2>/dev/null); do
-            if ! grep -q 'lz4_arm64_decompress.h' "$f"; then
-              echo "Patching: $f"
-              sed -i '/^#include <linux\/lz4.h>/a #include <linux/lz4_arm64_decompress.h>' "$f"
-            fi
-          done
-
-          # Fix: fs/namespace.c - define DEFAULT_UNSHARE_KSU_MNT_ID if missing
-          if ! grep -q 'DEFAULT_UNSHARE_KSU_MNT_ID' fs/namespace.c; then
-            sed -i '/#include <uapi\/linux\/mount.h>/a #ifndef DEFAULT_UNSHARE_KSU_MNT_ID\n#define DEFAULT_UNSHARE_KSU_MNT_ID 100000\n#endif' fs/namespace.c
-          fi
-
-      - name: Execute Custom Toolchain Kernel Compilation
-        run: |
-          cd kernel-source
-
-          # Path matching now securely aligns to your runner's root tools workspace
-          export PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/bin:${{ github.workspace }}/tools/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin:$PATH"
-          export LD_LIBRARY_PATH="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/lib64:$LD_LIBRARY_PATH"
-
-          export ARCH=arm64
-          export SUBARCH=ARM64
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-android-
-
-          rm -rf out/
-          mkdir -p out
-          make O=out gki_defconfig
-
-          ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
-            out/.config \
-            arch/arm64/configs/vendor/ext_config/genevn_config
-
-          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' out/.config
-          sed -i 's|CONFIG_WERROR=y|# CONFIG_WERROR is not set|' out/.config
-          yes n | make O=out olddefconfig
-
-          make O=out \
-            CC=clang \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            STRIP=llvm-strip \
-            OBJDUMP=llvm-objdump \
-            OBJCOPY=llvm-objcopy \
-            Image.gz
-
-      - name: Archive Built Kernel Output Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: Compiled-Genevn-Kernel
-          path: |
-            kernel-source/out/arch/arm64/boot/Image.gz
-            kernel-source/out/drivers/**/*.ko
+  build:
+    uses: ./.github/workflows/Genevn-build.yml
+    secrets: inherit
+    with:
+      device_codename: ${{ inputs.device_codename }}
+      add_susfs: ${{ inputs.add_susfs }}
+      add_zeromount: ${{ inputs.add_zeromount }}
+      add_overlayfs: ${{ inputs.add_overlayfs }}
+      add_zram: ${{ inputs.add_zram }}
+      add_kpm: ${{ inputs.add_kpm }}

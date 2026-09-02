@@ -1,0 +1,224 @@
+name: Build Genevn Kernel
+
+on:
+  workflow_call:
+    inputs:
+      device_codename:
+        type: string
+        default: "genevn"
+      add_susfs:
+        type: boolean
+        default: true
+      add_zeromount:
+        type: boolean
+        default: true
+      add_overlayfs:
+        type: boolean
+        default: true
+      add_zram:
+        type: boolean
+        default: true
+      add_kpm:
+        type: boolean
+        default: true
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: 'true'
+  KERNEL_BRANCH: "android-14-release-u1tgns34.42-86-2-32"
+  KERNEL_TAG: "MMI-U1TGNS34.42-86-2-32"
+
+jobs:
+  # Step 1: Download AnyKernel3 + patches from deps workflow
+  dependencies:
+    uses: ./.github/workflows/Genevn-deps.yml
+
+  # Step 2: Download dependencies into build job
+  prepare:
+    name: Prepare Sources
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Checkout Snapdragon Toolchain
+        uses: actions/checkout@v4
+        with:
+          path: tools
+          fetch-depth: 1
+
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: '015stray91/kernel-msm-1'
+          path: kernel-source
+          ref: ${{ env.KERNEL_BRANCH }}
+          fetch-depth: 1
+
+      - name: Download AnyKernel3
+        uses: actions/download-artifact@v4
+        with:
+          name: anykernel3
+          path: AnyKernel3
+
+      - name: Download Kernel Patches
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-patches
+          path: kernel_patches
+
+      - name: Inject Device-Specific Forks
+        env:
+          GITHUB_TOKEN: ${{ secrets.OPENCODE_TOKEN }}
+        run: |
+          cd kernel-source
+          for PAGE in 1 2; do
+            PAGE_REPOS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/user/repos?page=${PAGE}&per_page=100" \
+              | jq -r '.[].name' 2>/dev/null || true)
+            for REPO in $PAGE_REPOS; do
+              if [[ "$REPO" == *"techpack"* || "$REPO" == *"drivers-external"* || "$REPO" == *"motorola-"* ]]; then
+                TARGET_DIR=$(echo "$REPO" | sed \
+                  -e 's/techpack /techpack\//g' \
+                  -e 's/drivers external /drivers\/external\//g' \
+                  -e 's/motorola hardware /drivers\/hardware\//g' \
+                  -e 's/-/+/g' \
+                  -e 's/ +/ /g' \
+                  | tr -d ' ')
+                echo "Cloning: $REPO -> $TARGET_DIR"
+                rm -rf "$TARGET_DIR"
+                git clone --depth=1 --branch "$KERNEL_TAG" \
+                  "https://github.com/${REPO}.git" "$TARGET_DIR" || {
+                  echo "Fallback to default branch for: $REPO"
+                  git clone --depth=1 "https://github.com/${REPO}.git" "$TARGET_DIR"
+                }
+              fi
+            done
+          done
+
+      - name: Upload Prepared Sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-sources-prepared
+          path: kernel-source/
+          retention-days: 1
+
+  # Step 3: Compile
+  compile:
+    name: Compile Kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: prepare
+
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 1024
+          swap-size-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
+      - name: Download Prepared Sources
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-sources-prepared
+          path: kernel-source
+
+      - name: Download AnyKernel3
+        uses: actions/download-artifact@v4
+        with:
+          name: anykernel3
+          path: AnyKernel3
+
+      - name: Provision Build Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc build-essential libncurses5 libtinfo5 \
+            libssl-dev xz-utils flex bison python3-distutils jq curl unzip lld
+
+      - name: Patch Kernel Source
+        run: |
+          cd kernel-source
+
+          # Fix: create forward-declaration header for LZ4_arm64_decompress_safe.
+          # <linux/lz4.h> lacks the arm64 variant; lib/lz4/lz4.h typedefs conflict.
+          cat > include/linux/lz4_arm64_decompress.h << 'LZ4EOF'
+          #ifndef _KOTO_LZ4_ARM64_DECOMPRESS_H
+          #define _KOTO_LZ4_ARM64_DECOMPRESS_H
+          #include <linux/types.h>
+          ssize_t LZ4_arm64_decompress_safe(const void *source, void *dest,
+                                            size_t inputSize, size_t outputSize,
+                                            bool dip);
+          #endif
+          LZ4EOF
+
+          # Add include to all .c files that call LZ4_arm64_decompress_safe
+          for f in $(grep -rl "LZ4_arm64_decompress_safe" --include="*.c" . 2>/dev/null); do
+            if ! grep -q 'lz4_arm64_decompress.h' "$f"; then
+              echo "Patching: $f"
+              sed -i '/^#include <linux\/lz4.h>/a #include <linux/lz4_arm64_decompress.h>' "$f"
+            fi
+          done
+
+          # Fix: define DEFAULT_UNSHARE_KSU_MNT_ID in namespace.c if missing
+          if ! grep -q 'DEFAULT_UNSHARE_KSU_MNT_ID' fs/namespace.c; then
+            sed -i '/#include <uapi\/linux\/mount.h>/a #ifndef DEFAULT_UNSHARE_KSU_MNT_ID\n#define DEFAULT_UNSHARE_KSU_MNT_ID 100000\n#endif' fs/namespace.c
+          fi
+
+      - name: Build Kernel
+        run: |
+          cd kernel-source
+
+          TOOLCHAIN="${{ github.workspace }}/tools/clang/host/linux-x86/clang-r416183b/bin"
+          GCC="${{ github.workspace }}/tools/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+          export PATH="$TOOLCHAIN:$GCC:$PATH"
+          export LD_LIBRARY_PATH="$TOOLCHAIN/../lib64:$LD_LIBRARY_PATH"
+
+          export ARCH=arm64
+          export SUBARCH=ARM64
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-android-
+
+          rm -rf out/
+          mkdir -p out
+
+          make O=out gki_defconfig
+
+          ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
+            out/.config \
+            arch/arm64/configs/vendor/ext_config/genevn_config
+
+          # Disable problematic configs before olddefconfig
+          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' out/.config
+          sed -i 's|CONFIG_WERROR=y|# CONFIG_WERROR is not set|' out/.config
+
+          # Auto-answer olddefconfig prompts with 'n' (skip new symbols)
+          yes n | make O=out olddefconfig
+
+          make O=out \
+            CC=clang \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            STRIP=llvm-strip \
+            OBJDUMP=llvm-objdump \
+            OBJCOPY=llvm-objcopy \
+            Image.gz
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: kernel-image-${{ inputs.device_codename }}
+          path: |
+            kernel-source/out/arch/arm64/boot/Image.gz
+            kernel-source/out/drivers/**/*.ko
+          retention-days: 1
