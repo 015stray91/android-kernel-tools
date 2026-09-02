@@ -54,7 +54,7 @@ jobs:
           USER_REPOS=""
           for PAGE in 1 2; do
             PAGE_REPOS=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              "https://github.com{PAGE}&per_page=100" | jq -r '.[].name 2>/dev/null' || true)
+              "https://api.github.com/user/repos?page=${PAGE}&per_page=100" | jq -r '.[].name' 2>/dev/null || true)
             USER_REPOS="$USER_REPOS $PAGE_REPOS"
           done
           
@@ -66,9 +66,9 @@ jobs:
               echo "Extracting: $REPO @ Tag: $TARGET_TAG -> $TARGET_DIR"
               rm -rf "$TARGET_DIR"
               
-              git clone --depth=1 --branch "$TARGET_TAG" "https://github.com{REPO}.git" "$TARGET_DIR" || {
+              git clone --depth=1 --branch "$TARGET_TAG" "https://github.com/${REPO}.git" "$TARGET_DIR" || {
                 echo "Fallback to default branch for: $REPO"
-                git clone --depth=1 "https://github.com{REPO}.git" "$TARGET_DIR"
+                git clone --depth=1 "https://github.com/${REPO}.git" "$TARGET_DIR"
               }
             fi
           done
@@ -86,7 +86,9 @@ jobs:
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-android-
           
-          make O=out clean mrproper
+          rm -rf out/
+          mkdir -p out
+          make O=out mrproper
           make O=out gki_defconfig
           
           ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
