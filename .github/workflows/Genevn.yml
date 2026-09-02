@@ -79,11 +79,19 @@ jobs:
         run: |
           cd kernel-source
 
-          # Fix 1: crypto/lz4.c - include lib/lz4 arm64 header for LZ4_arm64_decompress_safe
-          sed -i '/#include <crypto\/internal\/scompress.h>/a #include "../lib/lz4/lz4.h"' crypto/lz4.c
+          # Fix: add lib/lz4/lz4.h include to all .c files that use LZ4_arm64_decompress_safe
+          # The kernel's include/linux/lz4.h lacks the arm64 variant; lib/lz4/lz4.h has it
+          for f in $(grep -rl "LZ4_arm64_decompress_safe" --include="*.c" . 2>/dev/null); do
+            if ! grep -q 'lib/lz4/lz4.h' "$f"; then
+              echo "Patching: $f"
+              sed -i '/^#include/i #include "../lib/lz4/lz4.h"' "$f"
+            fi
+          done
 
-          # Fix 2: fs/namespace.c - define DEFAULT_UNSHARE_KSU_MNT_ID if missing
-          sed -i 's|#include <uapi/linux/mount.h>|#include <uapi/linux/mount.h>\n#ifndef DEFAULT_UNSHARE_KSU_MNT_ID\n#define DEFAULT_UNSHARE_KSU_MNT_ID 100000\n#endif|' fs/namespace.c
+          # Fix: fs/namespace.c - define DEFAULT_UNSHARE_KSU_MNT_ID if missing
+          if ! grep -q 'DEFAULT_UNSHARE_KSU_MNT_ID' fs/namespace.c; then
+            sed -i '/#include <uapi\/linux\/mount.h>/a #ifndef DEFAULT_UNSHARE_KSU_MNT_ID\n#define DEFAULT_UNSHARE_KSU_MNT_ID 100000\n#endif' fs/namespace.c
+          fi
 
       - name: Execute Custom Toolchain Kernel Compilation
         run: |
