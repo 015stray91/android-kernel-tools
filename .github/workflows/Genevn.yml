@@ -92,7 +92,7 @@ jobs:
           
           ARCH=arm64 scripts/kconfig/merge_config.sh -O out \
             out/.config \
-            arch/arm64/configs/genevn_config
+            arch/arm64/configs/vendor/ext_config/genevn_config
             
           make O=out olddefconfig
           
