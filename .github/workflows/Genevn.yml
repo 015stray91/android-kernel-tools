@@ -96,7 +96,7 @@ jobs:
 
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' out/.config
           sed -i 's|CONFIG_WERROR=y|# CONFIG_WERROR is not set|' out/.config
-          yes "" | make O=out olddefconfig
+          yes n | make O=out olddefconfig
 
           make O=out \
             CC=clang \
@@ -105,7 +105,7 @@ jobs:
             STRIP=llvm-strip \
             OBJDUMP=llvm-objdump \
             OBJCOPY=llvm-objcopy \
-            -j$(nproc --all)
+            Image.gz
 
       - name: Archive Built Kernel Output Artifacts
         uses: actions/upload-artifact@v4
